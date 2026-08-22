@@ -146,7 +146,165 @@ fn avx512_opt_in() -> bool {
 /// `dst.len() != src.len()` の場合。
 pub fn gf_xor(dst: &mut [u8], src: &[u8]) {
     assert_eq!(dst.len(), src.len(), "gf_xor: 長さが一致しません");
-    // XOR は factor=1 の乗算と同一。専用の高速路として 8 バイト単位で処理する。
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        // AVX2 が使えるなら 32 byte/iter で処理する(端数はスカラーへ)。
+        if detect().avx2 {
+            let n = dst.len();
+            let done = unsafe { xor_avx2(dst, src) };
+            if done < n {
+                gf_xor_scalar(&mut dst[done..], &src[done..]);
+            }
+            return;
+        }
+    }
+    gf_xor_scalar(dst, src);
+}
+
+/// AVX2 による XOR(処理済みバイト数を返す)。
+///
+/// # Safety
+/// 呼び出し元は AVX2 が利用可能であることを保証すること。
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn xor_avx2(dst: &mut [u8], src: &[u8]) -> usize {
+    use x86::*;
+    unsafe {
+        let n = dst.len();
+        let blocks = n / 32;
+        let dp = dst.as_mut_ptr();
+        let sp = src.as_ptr();
+        for i in 0..blocks {
+            let off = (i * 32) as isize;
+            let a = _mm256_loadu_si256(dp.offset(off) as *const __m256i);
+            let b = _mm256_loadu_si256(sp.offset(off) as *const __m256i);
+            _mm256_storeu_si256(dp.offset(off) as *mut __m256i, _mm256_xor_si256(a, b));
+        }
+        blocks * 32
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ホーナー法(acc = acc * 2^times ^ src)
+// ---------------------------------------------------------------------------
+
+/// GF(2^8) 上でバイトを 2 倍する(左 1bit シフト + 桁あふれ時に 0x1d を XOR)。
+#[inline]
+pub const fn gf_mul2_byte(b: u8) -> u8 {
+    (b << 1) ^ (((b >> 7) & 1) * 0x1d)
+}
+
+const MASK_HIGH_U64: u64 = 0x8080_8080_8080_8080;
+const MASK_LOW7_U64: u64 = 0x7f7f_7f7f_7f7f_7f7f;
+const POLY_U64: u64 = 0x1d1d_1d1d_1d1d_1d1d;
+
+/// u64 語に詰めた 8 バイトをそれぞれ GF(2^8) 上で 2 倍する。
+#[inline(always)]
+const fn mul2_u64(w: u64) -> u64 {
+    let high = w & MASK_HIGH_U64;
+    // 最上位ビットが立っているバイトを 0xff へ展開する
+    let mask = (high >> 7) * 0xff;
+    ((w & MASK_LOW7_U64) << 1) ^ (mask & POLY_U64)
+}
+
+/// `acc = acc * 2^times ^ src`(シンドローム畳み込みのホーナー法 1 ステップ)。
+///
+/// RAID6 の Q シンドローム `Q = Σ D_i · 2^i` は係数テーブルを持たずに
+/// `q = 0; for d in disks.rev() { q = q*2 ^ d }` で計算できる。`times = 2` に
+/// すれば RAID-Z3 の R シンドローム(`Σ D_i · 4^i`)にも使える。
+///
+/// `times = 0` は単なる XOR([`gf_xor`])と等価。
+///
+/// # Panics
+/// `acc.len() != src.len()` の場合。
+pub fn gf_mul_pow2_xor(acc: &mut [u8], src: &[u8], times: u32) {
+    assert_eq!(acc.len(), src.len(), "gf_mul_pow2_xor: 長さが一致しません");
+    if times == 0 {
+        gf_xor(acc, src);
+        return;
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if detect().avx2 {
+            let n = acc.len();
+            let done = unsafe { mul_pow2_xor_avx2(acc, src, times) };
+            if done < n {
+                gf_mul_pow2_xor_scalar(&mut acc[done..], &src[done..], times);
+            }
+            return;
+        }
+    }
+    gf_mul_pow2_xor_scalar(acc, src, times);
+}
+
+/// `acc = acc * 2 ^ src`([`gf_mul_pow2_xor`] の `times = 1`)。
+pub fn gf_mul2_xor(acc: &mut [u8], src: &[u8]) {
+    gf_mul_pow2_xor(acc, src, 1);
+}
+
+/// `acc = acc * 4 ^ src`([`gf_mul_pow2_xor`] の `times = 2`)。
+pub fn gf_mul4_xor(acc: &mut [u8], src: &[u8]) {
+    gf_mul_pow2_xor(acc, src, 2);
+}
+
+/// ホーナー法のスカラー実装(u64 ビットトリック)。全アーキテクチャ共通。
+pub fn gf_mul_pow2_xor_scalar(acc: &mut [u8], src: &[u8], times: u32) {
+    assert_eq!(acc.len(), src.len());
+    let n = acc.len();
+    let chunks = n / 8;
+    for i in 0..chunks {
+        let o = i * 8;
+        let mut w = u64::from_ne_bytes(acc[o..o + 8].try_into().unwrap());
+        for _ in 0..times {
+            w = mul2_u64(w);
+        }
+        let s = u64::from_ne_bytes(src[o..o + 8].try_into().unwrap());
+        acc[o..o + 8].copy_from_slice(&(w ^ s).to_ne_bytes());
+    }
+    for i in chunks * 8..n {
+        let mut b = acc[i];
+        for _ in 0..times {
+            b = gf_mul2_byte(b);
+        }
+        acc[i] = b ^ src[i];
+    }
+}
+
+/// ホーナー法の AVX2 実装(32 byte/iter、処理済みバイト数を返す)。
+///
+/// # Safety
+/// 呼び出し元は AVX2 が利用可能であることを保証すること。
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn mul_pow2_xor_avx2(acc: &mut [u8], src: &[u8], times: u32) -> usize {
+    use x86::*;
+    unsafe {
+        let n = acc.len();
+        let blocks = n / 32;
+        let ap = acc.as_mut_ptr();
+        let sp = src.as_ptr();
+        let zero = _mm256_setzero_si256();
+        let poly = _mm256_set1_epi8(0x1du8 as i8);
+        let low7 = _mm256_set1_epi8(0x7fu8 as i8);
+        for i in 0..blocks {
+            let off = (i * 32) as isize;
+            let mut a = _mm256_loadu_si256(ap.offset(off) as *const __m256i);
+            for _ in 0..times {
+                // 符号付き比較 0 > a は「最上位ビットが立っているバイト」で真
+                let mask = _mm256_cmpgt_epi8(zero, a);
+                let shifted = _mm256_slli_epi64(_mm256_and_si256(a, low7), 1);
+                a = _mm256_xor_si256(shifted, _mm256_and_si256(mask, poly));
+            }
+            let s = _mm256_loadu_si256(sp.offset(off) as *const __m256i);
+            _mm256_storeu_si256(ap.offset(off) as *mut __m256i, _mm256_xor_si256(a, s));
+        }
+        blocks * 32
+    }
+}
+
+/// スカラー(u64 語単位)の XOR。全アーキテクチャで動作する参照実装。
+pub fn gf_xor_scalar(dst: &mut [u8], src: &[u8]) {
+    assert_eq!(dst.len(), src.len());
     let n = dst.len();
     let chunks = n / 8;
     for i in 0..chunks {
@@ -390,6 +548,33 @@ pub fn raid6_parity(stripes: &[&[u8]], p: &mut [u8], q: &mut [u8]) {
     }
 }
 
+/// RAID-Z3 相当の P/Q/R シンドロームを、ホーナー法で一括計算する。
+///
+/// - `P = Σ D_i`(単純 XOR)
+/// - `Q = Σ D_i · 2^i`
+/// - `R = Σ D_i · 4^i`
+///
+/// 係数テーブルを引かずに済むため [`raid6_parity`] より高速。
+///
+/// # Panics
+/// 長さが不揃いの場合。
+pub fn raid6_parity3(stripes: &[&[u8]], p: &mut [u8], q: &mut [u8], r: &mut [u8]) {
+    assert_eq!(p.len(), q.len(), "raid6_parity3: P/Q の長さが不一致");
+    assert_eq!(p.len(), r.len(), "raid6_parity3: P/R の長さが不一致");
+    p.fill(0);
+    q.fill(0);
+    r.fill(0);
+    for s in stripes.iter() {
+        assert_eq!(s.len(), p.len(), "raid6_parity3: ストライプ長が不一致");
+        gf_xor(p, s);
+    }
+    // ホーナー法は末尾のディスクから畳み込む
+    for s in stripes.iter().rev() {
+        gf_mul2_xor(q, s);
+        gf_mul4_xor(r, s);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,7 +671,116 @@ mod tests {
     }
 
     #[test]
+    fn mul2_byte_matches_gf_mul() {
+        for b in 0..=255u8 {
+            assert_eq!(gf_mul2_byte(b), gf_mul(b, 2), "b={b:#04x}");
+        }
+    }
+
+    #[test]
+    fn mul_pow2_xor_matches_naive() {
+        for len in [0usize, 1, 7, 8, 31, 32, 33, 64, 1000, 4096, 4097] {
+            let src = sample(len);
+            for times in 0u32..=3 {
+                let start = sample(len);
+                let mut a = start.clone();
+                gf_mul_pow2_xor(&mut a, &src, times);
+
+                let mut b = start.clone();
+                gf_mul_pow2_xor_scalar(&mut b, &src, times);
+                assert_eq!(a, b, "dispatch vs scalar len={len} times={times}");
+
+                // 素朴なバイト単位計算を基準に検証
+                let expect: Vec<u8> = start
+                    .iter()
+                    .zip(src.iter())
+                    .map(|(&x, &s)| {
+                        let mut v = x;
+                        for _ in 0..times {
+                            v = gf_mul(v, 2);
+                        }
+                        v ^ s
+                    })
+                    .collect();
+                assert_eq!(a, expect, "vs naive len={len} times={times}");
+            }
+        }
+    }
+
+    /// ホーナー法で畳み込んだ Q シンドロームが、係数テーブル方式
+    /// (`raid6_parity`)の結果と完全一致することを確認する。
+    #[test]
+    fn horner_q_matches_coefficient_form() {
+        let len = 777;
+        let disks: Vec<Vec<u8>> = (0..6)
+            .map(|k| sample(len).iter().map(|x| x.wrapping_add(k)).collect())
+            .collect();
+        let refs: Vec<&[u8]> = disks.iter().map(|d| d.as_slice()).collect();
+
+        let mut p = vec![0u8; len];
+        let mut q = vec![0u8; len];
+        raid6_parity(&refs, &mut p, &mut q);
+
+        // ホーナー法: q = 0; for d in disks.rev() { q = q*2 ^ d }
+        let mut hq = vec![0u8; len];
+        for d in refs.iter().rev() {
+            gf_mul2_xor(&mut hq, d);
+        }
+        assert_eq!(hq, q, "ホーナー法と係数テーブル方式のQが不一致");
+    }
+
+    #[test]
+    fn raid6_parity3_matches_naive() {
+        let len = 500;
+        let disks: Vec<Vec<u8>> = (0..5)
+            .map(|k| {
+                sample(len)
+                    .iter()
+                    .map(|x| x.wrapping_mul(3).wrapping_add(k))
+                    .collect()
+            })
+            .collect();
+        let refs: Vec<&[u8]> = disks.iter().map(|d| d.as_slice()).collect();
+
+        let mut p = vec![0u8; len];
+        let mut q = vec![0u8; len];
+        let mut r = vec![0u8; len];
+        raid6_parity3(&refs, &mut p, &mut q, &mut r);
+
+        // 素朴な係数形との突き合わせ: P=Σd, Q=Σ d·2^i, R=Σ d·4^i
+        let mut np = vec![0u8; len];
+        let mut nq = vec![0u8; len];
+        let mut nr = vec![0u8; len];
+        for (i, d) in refs.iter().enumerate() {
+            let mut c2: u8 = 1;
+            let mut c4: u8 = 1;
+            for _ in 0..i {
+                c2 = gf_mul(c2, 2);
+                c4 = gf_mul(c4, 4);
+            }
+            for j in 0..len {
+                np[j] ^= d[j];
+                nq[j] ^= gf_mul(d[j], c2);
+                nr[j] ^= gf_mul(d[j], c4);
+            }
+        }
+        assert_eq!(p, np, "P");
+        assert_eq!(q, nq, "Q");
+        assert_eq!(r, nr, "R");
+    }
+
+    #[test]
     fn xor_works() {
+        for len in [0usize, 1, 7, 31, 32, 33, 1001, 4096] {
+            let src = sample(len);
+            let mut a = sample(len);
+            let expect: Vec<u8> = a.iter().zip(src.iter()).map(|(x, y)| x ^ y).collect();
+            gf_xor(&mut a, &src);
+            assert_eq!(a, expect, "len={len}");
+            let mut b = sample(len);
+            gf_xor_scalar(&mut b, &src);
+            assert_eq!(b, expect, "scalar len={len}");
+        }
         let src = sample(1001);
         let mut a = sample(1001);
         let expect: Vec<u8> = a.iter().zip(src.iter()).map(|(x, y)| x ^ y).collect();

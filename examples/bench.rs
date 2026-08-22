@@ -10,7 +10,7 @@ fn main() {
     const LEN: usize = 4 * 1024 * 1024; // 4 MiB
     const ITERS: usize = 50;
     let src: Vec<u8> = (0..LEN)
-        .map(|i| (i as u32 * 2654435761 >> 13) as u8)
+        .map(|i| ((i as u32).wrapping_mul(2654435761) >> 13) as u8)
         .collect();
     let mut dst = vec![0u8; LEN];
     let factor: u8 = 0x8d;
@@ -80,6 +80,54 @@ fn main() {
     } else {
         println!("avx512   : このCPUでは未搭載のため実測不可(未検証)");
     }
+
+    // --- P パリティ(単純 XOR) ---
+    println!();
+    let t = Instant::now();
+    for _ in 0..ITERS {
+        open_cpu::gf_xor_scalar(&mut dst, &src);
+    }
+    let xs = t.elapsed().as_secs_f64();
+    let t = Instant::now();
+    for _ in 0..ITERS {
+        open_cpu::gf_xor(&mut dst, &src);
+    }
+    let xd = t.elapsed().as_secs_f64();
+    println!(
+        "xor scalar   : {:>8.3} ms  {:>9.2} MiB/s",
+        xs * 1000.0,
+        bytes / xs / (1024.0 * 1024.0)
+    );
+    println!(
+        "xor dispatch : {:>8.3} ms  {:>9.2} MiB/s  ({:.2}x vs scalar)",
+        xd * 1000.0,
+        bytes / xd / (1024.0 * 1024.0),
+        xs / xd
+    );
+
+    // --- ホーナー法(acc = acc*2 ^ src、Q シンドローム) ---
+    println!();
+    let t = Instant::now();
+    for _ in 0..ITERS {
+        open_cpu::gf_mul_pow2_xor_scalar(&mut dst, &src, 1);
+    }
+    let hs = t.elapsed().as_secs_f64();
+    let t = Instant::now();
+    for _ in 0..ITERS {
+        open_cpu::gf_mul2_xor(&mut dst, &src);
+    }
+    let hd = t.elapsed().as_secs_f64();
+    println!(
+        "horner scalar  : {:>8.3} ms  {:>9.2} MiB/s",
+        hs * 1000.0,
+        bytes / hs / (1024.0 * 1024.0)
+    );
+    println!(
+        "horner dispatch: {:>8.3} ms  {:>9.2} MiB/s  ({:.2}x vs scalar)",
+        hd * 1000.0,
+        bytes / hd / (1024.0 * 1024.0),
+        hs / hd
+    );
 
     std::hint::black_box(&dst);
 }

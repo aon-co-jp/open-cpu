@@ -98,4 +98,22 @@ impl CpuCapabilities {
             v.join(" ")
         }
     }
+
+    /// 指定した機能がすべて有効かどうか(呼び出し側の事前条件チェック用)。
+    ///
+    /// ```
+    /// let caps = open_cpu::detect();
+    /// if caps.has_all(&[caps.avx2, caps.fma]) {
+    ///     // AVX2 と FMA3 の両方が使える経路
+    /// }
+    /// ```
+    pub fn has_all(&self, features: &[bool]) -> bool {
+        features.iter().all(|&f| f)
+    }
+}
+
+impl std::fmt::Display for CpuCapabilities {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.summary())
+    }
 }

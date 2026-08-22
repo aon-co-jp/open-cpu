@@ -36,6 +36,17 @@ CPU 命令セット(AVX2/AVX-512/PCLMULQDQ/BMI1/BMI2/FMA3/AES-NI/POPCNT/SHA-NI)�
 - `cargo bench` は使わず、`examples/bench.rs` の `std::time::Instant` による
   簡易計測で足りる(依存を増やさないため)。
 
+## 多言語ドキュメント
+
+`README/` フォルダに 15 言語版の README / CLAUDE / PORTING を配置している
+(エコシステム共通の運用、`open-raid-z` / `open-cuda` と同じ命名規則)。
+**日本語版(リポジトリ直下の `README.md` / `CLAUDE.md` / `PORTING.md`)が
+正本**であり、内容を更新した際は 15 言語版も追従させること
+(自動同期の仕組みは無い、手動で反映する)。
+
+言語: US English / UK English / Germany / Italy / France / Spain / Russia /
+Ukraine / Hebrew / Persian(Iran) / Arabic / China / Taiwan / Korea / Japan。
+
 ## HANDOFF
 
 - **2026-08-22 新規作成 + 2 リポジトリへの統合**:
@@ -48,10 +59,37 @@ CPU 命令セット(AVX2/AVX-512/PCLMULQDQ/BMI1/BMI2/FMA3/AES-NI/POPCNT/SHA-NI)�
     スカラー / PCLMULQDQ / AVX2 / AVX-512 の 4 実装を実行時ディスパッチ。
   - 実測(Ryzen 9 3950X、4MiB×50回): scalar 1003 MiB/s、pclmulqdq 1916 MiB/s
     (1.91x)、**avx2 22531 MiB/s(22.46x)**。AVX-512 は非搭載のため実測不可。
+    → **この avx2 の倍率は後日の再計測で 11.6〜18.1 倍の範囲に変動すると
+    判明した**(SIMD 側がメモリ帯域律速のため。最新の数値と範囲は
+    README.md の「実測ベンチマーク」節が正)。
   - `cargo test --release` 全 11 テスト + doctest 1 件通過。PCLMULQDQ 実装は
     全 256 係数でスカラーと一致することを確認済み。
   - 統合実績: `open-raid-z`(GF 演算の置き換え)と `open-english/server`
     (`/v1/cpu-runtime` エンドポイントと起動ログ)へ path 依存で組み込み済み。
+
+- **2026-08-22(続き)実用性向上サイクル + 自己紹介機能**:
+  初期実装の後、連携性・実用性を高めるための開発→TEST→修正サイクルを実施した。
+  - **サイクル1: ホーナー法 API の追加**(`gf_mul_pow2_xor` /
+    `gf_mul2_xor` / `gf_mul4_xor`、AVX2 + スカラー)。これにより
+    `open-raid-z` の `mul2_xor_into` / `mul4_xor_into` の AVX2 経路も
+    open-cpu へ移譲でき、あちら側の x86 コードをさらに削減できた。
+    `gf_xor` にも AVX2 経路を追加(移譲が性能退行にならないようにするため)。
+  - **サイクル2: 使い勝手の改善**。`CpuCapabilities` に `Display` 実装と
+    `has_all()` を追加。RAID-Z3 相当の P/Q/R を一括計算する
+    `raid6_parity3()` を追加。`examples/bench.rs` に XOR・ホーナー法の
+    計測を追加。
+  - **検証**: `cargo test --release` **全 15 テスト + doctest 2 件通過**。
+    ベンチは 4 回連続実行し、ばらつき(SIMD 側がメモリ帯域律速のため
+    11.6〜18.1 倍と変動)を README に正直に範囲で記録した。
+  - **`open-english` への統合で見つけた実バグ(重要な教訓)**: 「誰が
+    作ったのか」への自己紹介応答機能をキーワード部分一致
+    (`"誰が作"`)で実装したところ、**実ブラウザでのテストで
+    「誰が【このシステムを】作ったのですか?」が検出できない**ことが
+    判明した(疑問詞と動詞の間に語句が入るため)。疑問詞リストと動詞
+    リストを分けて AND 条件で判定する形へ修正し、肯定 10 例・否定 6 例の
+    確認と実ブラウザでの E2E 確認を行った。**「ユニットテストが通った」
+    ではなく「実際にチャットへ入力してみる」ところまでやらないと
+    見つからない類のバグ**だった、という記録。
 
 - **次にすべきこと**:
   1. `aruaru-db` の チェックサム・圧縮まわり、`aruaru-llm` の行列演算、
@@ -66,3 +104,9 @@ CPU 命令セット(AVX2/AVX-512/PCLMULQDQ/BMI1/BMI2/FMA3/AES-NI/POPCNT/SHA-NI)�
   4. path 依存(`path = "../open-cpu"`)で組んでいるため、VPS 等
      `F:\runo` レイアウトが無い環境でビルドする場合は git 依存への
      切り替えが必要になる。実際に VPS でビルドする段になったら対応する。
+  5. SSE2 のみの CPU 向け実装が無いため、`open-raid-z` は SSE2 経路だけ
+     自前の実装を残している。SSE2 版を追加すればそこも移譲できる。
+  6. `gf_xor` は SIMD 化してもスカラー比 1.12〜1.25 倍しか出ない
+     (メモリ帯域律速)。非一時ストア(`_mm256_stream_si256`)で
+     キャッシュ汚染を避ける最適化が効く可能性があり、大きなバッファ向けに
+     試す価値がある(未検証)。

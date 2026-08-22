@@ -71,16 +71,22 @@ ZFS RAID-Z と同一。**移行前に、自リポジトリの多項式・生成�
 |---|---|
 | `for i in .. { p[i] ^= d[i] }` | `open_cpu::gf_xor(&mut p, &d)` |
 | `for i in .. { q[i] ^= gf_mul(d[i], c) }` | `open_cpu::gf_mul_parity(&mut q, &d, c)` |
+| `for i in .. { acc[i] = mul2(acc[i]) ^ d[i] }` | `open_cpu::gf_mul2_xor(&mut acc, &d)` |
+| `for i in .. { acc[i] = mul4(acc[i]) ^ d[i] }` | `open_cpu::gf_mul4_xor(&mut acc, &d)` |
+| 任意回数の `×2^n` ホーナー法 | `open_cpu::gf_mul_pow2_xor(&mut acc, &d, n)` |
 | 独自 `gf_mul(a: u8, b: u8) -> u8` | `open_cpu::gf_mul(a, b)`(`const fn`) |
+| 独自 `mul2_byte(b) -> u8` | `open_cpu::gf_mul2_byte(b)`(`const fn`) |
 | 独自の `g^i` 係数計算 | `open_cpu::raid6_coeff(i)` |
 | P/Q 一括計算 | `open_cpu::raid6_parity(&stripes, &mut p, &mut q)` |
+| P/Q/R 一括計算(RAID-Z3 相当) | `open_cpu::raid6_parity3(&stripes, &mut p, &mut q, &mut r)` |
 
 `gf_mul_parity` / `gf_xor` は `dst.len() != src.len()` で panic する。
 呼び出し側でストライプ長を揃えておくこと。
 
 特定の実装を明示的に呼びたい場合(ベンチや検証目的):
 
-- `open_cpu::gf_mul_parity_scalar(...)` — safe
+- `open_cpu::gf_mul_parity_scalar(...)` / `gf_xor_scalar(...)` /
+  `gf_mul_pow2_xor_scalar(...)` — safe
 - `unsafe { open_cpu::gf_mul_parity_avx2(...) }` — 呼び出し元が AVX2 対応を保証
 - `unsafe { open_cpu::gf_mul_parity_pclmul(...) }` — 同 SSSE3+PCLMULQDQ
 - `unsafe { open_cpu::gf_mul_parity_avx512(...) }` — **実行未検証**
@@ -93,6 +99,24 @@ ZFS RAID-Z と同一。**移行前に、自リポジトリの多項式・生成�
    パリティ値の比較が無ければ、移行時に追加すること。
 3. ログに `open_cpu::runtime_summary()` を 1 行出しておくと、
    実機でどの実装が選択されたか後から確認できる。
+
+## 4.5 実際の移行例(`open-raid-z`、2026-08-22)
+
+参考として、最初の移行実例の要点を挙げる:
+
+- `detect_level()` 内の `std::is_x86_feature_detected!` を
+  `open_cpu::detect()` の参照へ置き換えた(`SimdLevel` という
+  リポジトリ固有の列挙型はそのまま残し、その**判定材料だけ**を
+  open-cpu へ移した)。既存の呼び出し側を一切変更せずに済む。
+- `gf_mul_xor_into()` / `xor_into()` / `mul_pow2_xor_into()` の
+  **AVX2 経路だけ**を open-cpu へ委譲し、AVX-512 経路(open-cpu 側も
+  未検証)と SSE2 経路(open-cpu に実装が無い)はリポジトリ側の実装を
+  残した。**性能が下がる置き換えはしない**、という判断。
+- 使われなくなった SIMD カーネルは削除せず `#[allow(dead_code)]` を
+  付けて残置し、将来 open-cpu 側と相互検証する際の参照とした。
+
+この「全部を一度に置き換えず、等価かつ性能が落ちない部分から段階的に
+委譲する」進め方を推奨する。
 
 ## 5. 注意点
 

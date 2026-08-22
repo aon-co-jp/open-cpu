@@ -38,8 +38,9 @@ mod gf;
 
 pub use caps::{detect, CpuCapabilities};
 pub use gf::{
-    gf_mul, gf_mul_parity, gf_mul_parity_scalar, gf_xor, raid6_coeff, raid6_parity, selected_impl,
-    GfImpl, GF_POLY, RAID6_GENERATOR,
+    gf_mul, gf_mul2_byte, gf_mul2_xor, gf_mul4_xor, gf_mul_parity, gf_mul_parity_scalar,
+    gf_mul_pow2_xor, gf_mul_pow2_xor_scalar, gf_xor, gf_xor_scalar, raid6_coeff, raid6_parity,
+    raid6_parity3, selected_impl, GfImpl, GF_POLY, RAID6_GENERATOR,
 };
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
