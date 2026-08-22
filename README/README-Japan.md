@@ -1,25 +1,6 @@
-# open-cpu
+> 日本語原文: [README.md](../README.md)
 
-> **多言語版 / Other languages**:
-> [US English](README/README-US_English.md) ·
-> [UK English](README/README-UK_English.md) ·
-> [Deutsch](README/README-Germany.md) ·
-> [Italiano](README/README-Italy.md) ·
-> [Français](README/README-France.md) ·
-> [Español](README/README-Spain.md) ·
-> [Русский](README/README-Russia.md) ·
-> [Українська](README/README-Ukraine.md) ·
-> [עברית](README/README-Hebrew.md) ·
-> [فارسی](README/README-IRAN_Persian.md) ·
-> [العربية](README/README-Arabic.md) ·
-> [简体中文](README/README-China.md) ·
-> [繁體中文](README/README-Taiwan.md) ·
-> [한국어](README/README-Korea.md) ·
-> [日本語](README/README-Japan.md)
->
-> ※日本語版(このファイル)が正本。各言語版は
-> [`CLAUDE.md`](CLAUDE.md) / [`PORTING.md`](PORTING.md) についても
-> `README/` フォルダに用意している。
+# open-cpu
 
 `aon-co-jp` エコシステム共通の **CPU 命令セット検出・ランタイムディスパッチ
 ライブラリ**(Rust)。
@@ -201,6 +182,6 @@ cargo run --release --example bench
 
 ## 関連
 
-- 移行手順: [PORTING.md](PORTING.md)
-- 開発方針・HANDOFF: [CLAUDE.md](CLAUDE.md)
+- 移行手順: [PORTING.md](PORTING-Japan.md)
+- 開発方針・HANDOFF: [CLAUDE.md](CLAUDE-Japan.md)
 - GitHub organization: https://github.com/aon-co-jp
