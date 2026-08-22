@@ -1,0 +1,20 @@
+[package]
+name = "open-cpu"
+version = "0.1.0"
+edition = "2021"
+description = "aon-co-jp エコシステム共通の CPU 命令セット検出・ディスパッチライブラリ"
+license = "MIT"
+repository = "https://github.com/aon-co-jp/open-cpu"
+
+[lib]
+name = "open_cpu"
+path = "src/lib.rs"
+
+[[example]]
+name = "bench"
+path = "examples/bench.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
