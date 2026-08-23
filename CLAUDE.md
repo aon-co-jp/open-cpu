@@ -269,3 +269,32 @@ Ukraine / Hebrew / Persian(Iran) / Arabic / China / Taiwan / Korea / Japan。
      (メモリ帯域律速)。非一時ストア(`_mm256_stream_si256`)で
      キャッシュ汚染を避ける最適化が効く可能性があり、大きなバッファ向けに
      試す価値がある(未検証)。
+
+## HANDOFF追記(2026-08-23、AI推論での実利用状況を確認 — コード変更なし)
+
+`aruaru-llm`の階層的アクセラレーション作業(CUDA → Vulkan → DirectX →
+**CPU SIMD**)にあたり、「open-cpuは検出だけで実際の計算に使われていない
+のではないか」という疑いを実コードで検証した。
+
+- **結論: 実際に使われている。** `opencuda-blas::simd`が
+  `open_cpu::detect()`を唯一の情報源としており(2026-08-23の一元化作業)、
+  `launch_naive_gemm`はCPUデバイスの場合`simd::sgemm_cpu`(AVX-512 →
+  AVX2+FMA3 → スカラーの多段ディスパッチ)へ分岐する。
+  `open-cuda-llm::Linear::forward`・Attention・MLAはすべてこの
+  `opencuda-blas`経由なので、**GPUへオフロードされない計算はすべて
+  open-cpuの判定に従ってSIMD実行されている**。追加の配線は不要だった。
+- この開発機(Ryzen 9 3950X / Zen 2)の判定は`avx2+fma3+sse2`
+  (`isa_profile = avx2+fma3`)。`GET /v1/runtime`(aruaru-llm)・
+  `GET /v1/cpu-runtime`(open-english)の両方で実際にこの値が
+  報告されることをHTTPで確認した。
+- **参考(このリポジトリの価値を裏付ける実測)**: 同日、`aruaru-llm`で
+  D3D12 GPU(GT 730)へGEMMをオフロードする経路を実装して実測したところ、
+  **AVX2のCPU GEMMの方が3〜30倍速かった**。安価・低性能なGPUしか無い
+  環境では、GPUへ逃がすより**CPU SIMDを詰める方が効く**という
+  過去HANDOFF(2026-08-22、CPU SIMD化で実測3.34倍)の判断が改めて
+  裏付けられた形になる。詳細は`open-cuda/CLAUDE.md`の同日エントリ参照。
+- **このリポジトリのコードは変更していない**(確認のみ)。
+
+- 次にすべきこと: 変更なし(AVX-512/VNNI経路が実機未検証である点を含め、
+  既存のHANDOFFの課題がそのまま残る)。
+
