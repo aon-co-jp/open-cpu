@@ -140,3 +140,54 @@ Ukraine / Hebrew / Persian (Iran) / Arabic / China / Taiwan / Korea / Japan.
      (limited by memory bandwidth). An optimization using non-temporal stores
      (`_mm256_stream_si256`) to avoid cache pollution may be effective, and is
      worth trying for large buffers (unverified).
+
+
+---
+
+## HANDOFF 2026-08-23 (English summary)
+
+- **Added multi-ISA combination dispatch** (`src/isa.rs`): `Feature`,
+  `FeatureSet`, `IsaProfile` (8 named tiers), `supports_all`, `at_least`,
+  `select`, `detected_but_unused`. Existing boolean fields untouched
+  (backwards compatible).
+  - A monotonicity test failed twice and exposed two design errors:
+    (a) the AVX2 tier omitted PCLMULQDQ, and (b) **a CPU with AVX-512 VNNI
+    does not necessarily report AVX-VNNI**, so `Avx2Vnni` had to become a
+    branch off the main lineage rather than a step in it. Neither was
+    visible from enumerating combinations on paper.
+- **Added real kernels for FMA3 / POPCNT / BMI1 / BMI2** (`src/math.rs`):
+  `dot_f32` (3.17x), `popcount_bytes` (30.9x), `hamming_distance` (11.0x),
+  `axpy_f32` (1.03x — memory bound, reported honestly), plus `scale_f32`,
+  `extract_bits`, `deposit_bits`, `trailing_zeros_u64`. All verified
+  against scalar references including ragged lengths.
+  **28 tests + 5 doctests pass, zero warnings.**
+- **Most important finding: a feature bit is not a performance guarantee.**
+  Measured `pext` on this Zen 2 machine at **7.1x slower than scalar**
+  (177 ms vs 1269 ms). Added `vendor_family()` (CPUID) and `fast_bmi2()`
+  so AMD family 17h and below fall back to scalar. Lesson recorded:
+  always measure, never trust the CPUID bit alone.
+- **Technology survey (primary sources, links in the Japanese CLAUDE.md):**
+  - RAID6 GF(2^8)/CRC: algorithms are mature, but **Intel ISA-L 2.32 moved
+    to GFNI and VPCLMULQDQ** — a clear next step. OpenZFS has no GFNI in
+    master but its "benchmark all impls at init" design remains relevant.
+  - AI inference: **actively evolving.** llama.cpp dispatches at *binary*
+    granularity (per-microarch shared libraries, each a named bundle of
+    features) and replaced the `Q4_0_4_4`-style formats with runtime
+    "online repacking". oneDNN uses runtime JIT plus a totally ordered ISA
+    ladder. The named-tier idea was adopted here as `IsaProfile`; AMX and
+    repacking were judged excessive for this ecosystem's scale.
+  - BMI1/BMI2: mature and narrow. Zen 5 raises pext/pdep to 3/cycle; ZP7
+    provides a CLMUL-based portable fallback if it ever becomes a bottleneck.
+  - Rust: **`target_feature_11` stabilized in 1.86**, allowing safe
+    `#[target_feature]` functions. Refactoring kernels to concentrate
+    `unsafe` at the single dispatch boundary is deferred to a future session.
+- **Not done / next steps**: GFNI GF(2^8) multiply and VPCLMULQDQ CRC
+  (this machine lacks both instructions); `target_feature_11` refactor;
+  real-hardware AVX-512 validation; `aruaru-db` integration; SSE2-only
+  GF kernel; non-temporal stores for `gf_xor`.
+
+> Honesty note: figures above are measured on the development machine
+> (AMD Ryzen 9 3950X, Zen 2). **AVX-512, AVX-VNNI, AVX-512 VNNI, GFNI and
+> VPCLMULQDQ paths remain unverified on real hardware** because this CPU
+> does not have them. AVX-512 code paths are never selected by default;
+> they require `OPEN_CPU_ENABLE_AVX512=1`.

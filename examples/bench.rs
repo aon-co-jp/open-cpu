@@ -130,4 +130,182 @@ fn main() {
     );
 
     std::hint::black_box(&dst);
+
+    bench_float();
+    bench_bits();
+    bench_pext();
+}
+
+/// pext/pdep が本当に速いのかを実測する(Zen〜Zen 2 ではマイクロコードで遅い)。
+fn bench_pext() {
+    const REPS: usize = 20_000_000;
+    let caps = open_cpu::detect();
+    let (vendor, family) = open_cpu::vendor_family();
+    println!();
+    println!(
+        "--- pext/pdep (vendor: {vendor:?} family: {family:#x} | bmi2 bit: {} | fast_bmi2(): {}) ---",
+        caps.bmi2,
+        caps.fast_bmi2()
+    );
+    let mask = 0x5555_5555_5555_5555u64;
+
+    let t = Instant::now();
+    let mut acc = 0u64;
+    for i in 0..REPS as u64 {
+        acc ^= open_cpu::extract_bits_scalar(i.wrapping_mul(0x9E3779B97F4A7C15), mask);
+    }
+    let ss = t.elapsed().as_secs_f64();
+
+    #[cfg(target_arch = "x86_64")]
+    let hw = if caps.bmi2 {
+        let t = Instant::now();
+        let mut acc2 = 0u64;
+        for i in 0..REPS as u64 {
+            acc2 ^= unsafe {
+                std::arch::x86_64::_pext_u64(i.wrapping_mul(0x9E3779B97F4A7C15), mask)
+            };
+        }
+        std::hint::black_box(acc2);
+        Some(t.elapsed().as_secs_f64())
+    } else {
+        None
+    };
+    #[cfg(not(target_arch = "x86_64"))]
+    let hw: Option<f64> = None;
+
+    std::hint::black_box(acc);
+    println!("pext scalar : {:>8.3} ms", ss * 1000.0);
+    match hw {
+        Some(hs) => println!(
+            "pext bmi2   : {:>8.3} ms  ({:.2}x vs scalar{})",
+            hs * 1000.0,
+            ss / hs,
+            if ss / hs < 1.0 { " ← 遅い!スカラーを選ぶべき" } else { "" }
+        ),
+        None => println!("pext bmi2   : BMI2 非搭載のため計測不可"),
+    }
+}
+
+/// dot_f32 / axpy_f32 の実測(スカラー vs 組み合わせディスパッチ)。
+fn bench_float() {
+    const N: usize = 1 << 16; // 65536 要素 = 256 KiB
+    const REPS: usize = 2000;
+    let a: Vec<f32> = (0..N).map(|i| (i % 97) as f32 * 0.01).collect();
+    let b: Vec<f32> = (0..N).map(|i| (i % 89) as f32 * 0.02).collect();
+
+    println!();
+    println!("--- float kernels (impl: {}) ---", open_cpu::selected_float_impl());
+
+    let t = Instant::now();
+    let mut s0 = 0f32;
+    for _ in 0..REPS {
+        s0 += open_cpu::dot_f32_scalar(&a, &b);
+    }
+    let ds = t.elapsed().as_secs_f64();
+
+    let t = Instant::now();
+    let mut s1 = 0f32;
+    for _ in 0..REPS {
+        s1 += open_cpu::dot_f32(&a, &b);
+    }
+    let dd = t.elapsed().as_secs_f64();
+    let gflops = |sec: f64| (2.0 * N as f64 * REPS as f64) / sec / 1e9;
+    println!(
+        "dot scalar     : {:>8.3} ms  {:>6.2} GFLOP/s",
+        ds * 1000.0,
+        gflops(ds)
+    );
+    println!(
+        "dot dispatch   : {:>8.3} ms  {:>6.2} GFLOP/s  ({:.2}x vs scalar)",
+        dd * 1000.0,
+        gflops(dd),
+        ds / dd
+    );
+    println!("  (sum check: scalar {s0:.3} / dispatch {s1:.3})");
+
+    let mut acc = vec![0f32; N];
+    let t = Instant::now();
+    for _ in 0..REPS {
+        open_cpu::axpy_f32_scalar(&mut acc, &b, 1.000001);
+    }
+    let xs = t.elapsed().as_secs_f64();
+    let mut acc2 = vec![0f32; N];
+    let t = Instant::now();
+    for _ in 0..REPS {
+        open_cpu::axpy_f32(&mut acc2, &b, 1.000001);
+    }
+    let xd = t.elapsed().as_secs_f64();
+    println!(
+        "axpy scalar    : {:>8.3} ms  {:>6.2} GFLOP/s",
+        xs * 1000.0,
+        gflops(xs)
+    );
+    println!(
+        "axpy dispatch  : {:>8.3} ms  {:>6.2} GFLOP/s  ({:.2}x vs scalar)",
+        xd * 1000.0,
+        gflops(xd),
+        xs / xd
+    );
+    std::hint::black_box((&acc, &acc2));
+}
+
+/// popcount / hamming の実測。
+fn bench_bits() {
+    const N: usize = 4 << 20;
+    const REPS: usize = 50;
+    let a: Vec<u8> = (0..N).map(|i| (i % 251) as u8).collect();
+    let b: Vec<u8> = (0..N).map(|i| (i % 253) as u8).collect();
+    let bytes = (N * REPS) as f64;
+
+    println!();
+    println!("--- bit kernels ({}) ---", open_cpu::bit_impl_summary());
+    let t = Instant::now();
+    let mut c0 = 0u64;
+    for _ in 0..REPS {
+        c0 += open_cpu::popcount_bytes_scalar(&a);
+    }
+    let ps = t.elapsed().as_secs_f64();
+    let t = Instant::now();
+    let mut c1 = 0u64;
+    for _ in 0..REPS {
+        c1 += open_cpu::popcount_bytes(&a);
+    }
+    let pd = t.elapsed().as_secs_f64();
+    assert_eq!(c0, c1);
+    println!(
+        "popcount scalar  : {:>8.3} ms  {:>9.2} MiB/s",
+        ps * 1000.0,
+        bytes / ps / (1024.0 * 1024.0)
+    );
+    println!(
+        "popcount dispatch: {:>8.3} ms  {:>9.2} MiB/s  ({:.2}x vs scalar)",
+        pd * 1000.0,
+        bytes / pd / (1024.0 * 1024.0),
+        ps / pd
+    );
+
+    let t = Instant::now();
+    let mut h0 = 0u64;
+    for _ in 0..REPS {
+        h0 += open_cpu::hamming_distance_scalar(&a, &b);
+    }
+    let hs = t.elapsed().as_secs_f64();
+    let t = Instant::now();
+    let mut h1 = 0u64;
+    for _ in 0..REPS {
+        h1 += open_cpu::hamming_distance(&a, &b);
+    }
+    let hd = t.elapsed().as_secs_f64();
+    assert_eq!(h0, h1);
+    println!(
+        "hamming scalar   : {:>8.3} ms  {:>9.2} MiB/s",
+        hs * 1000.0,
+        bytes / hs / (1024.0 * 1024.0)
+    );
+    println!(
+        "hamming dispatch : {:>8.3} ms  {:>9.2} MiB/s  ({:.2}x vs scalar)",
+        hd * 1000.0,
+        bytes / hd / (1024.0 * 1024.0),
+        hs / hd
+    );
 }

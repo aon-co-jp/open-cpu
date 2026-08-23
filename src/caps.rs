@@ -32,6 +32,24 @@ pub struct CpuCapabilities {
     pub avx_vnni: bool,
     /// AVX-512 VNNI。フィールドと検出のみ、利用ロジックは未実装。
     pub avx512vnni: bool,
+    /// GFNI(`vgf2p8mulb` / `vgf2p8affineqb`)。GF(2^8) 乗算を 1 命令で行える。
+    ///
+    /// **検出のみ**。Intel ISA-L 2.32 が split-table PSHUFB から GFNI へ
+    /// 移行しており(Release_notes.txt: "Added new AVX2+GFNI and AVX512+GFNI
+    /// pq_gen implementations")、このクレートでも RAID6 GF 演算の
+    /// 高速パス候補になるが、開発機(Zen 2)が GFNI 非搭載のため未実装。
+    pub gfni: bool,
+    /// VPCLMULQDQ(256/512bit 幅のキャリーレス乗算)。**検出のみ**。
+    pub vpclmulqdq: bool,
+}
+
+/// CPU ベンダ(BMI2 の速度特性を判定するために使う)。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CpuVendor {
+    Intel,
+    Amd,
+    #[default]
+    Other,
 }
 
 static CAPS: OnceLock<CpuCapabilities> = OnceLock::new();
@@ -59,7 +77,51 @@ fn detect_uncached() -> CpuCapabilities {
         avx512vl: std::is_x86_feature_detected!("avx512vl"),
         avx_vnni: std::is_x86_feature_detected!("avxvnni"),
         avx512vnni: std::is_x86_feature_detected!("avx512vnni"),
+        gfni: std::is_x86_feature_detected!("gfni"),
+        vpclmulqdq: std::is_x86_feature_detected!("vpclmulqdq"),
     }
+}
+
+/// CPUID からベンダ文字列と family を読む(x86_64 のみ)。
+#[cfg(target_arch = "x86_64")]
+fn cpuid_vendor_family() -> (CpuVendor, u32) {
+    use std::arch::x86_64::__cpuid;
+    // leaf 0: ベンダ文字列 = EBX, EDX, ECX の順。
+    let r0 = __cpuid(0);
+    let mut name = [0u8; 12];
+    name[0..4].copy_from_slice(&r0.ebx.to_le_bytes());
+    name[4..8].copy_from_slice(&r0.edx.to_le_bytes());
+    name[8..12].copy_from_slice(&r0.ecx.to_le_bytes());
+    let vendor = match &name {
+        b"GenuineIntel" => CpuVendor::Intel,
+        b"AuthenticAMD" | b"HygonGenuine" => CpuVendor::Amd,
+        _ => CpuVendor::Other,
+    };
+    // leaf 1: EAX[11:8] = base family、EAX[27:20] = extended family。
+    let r1 = __cpuid(1);
+    let base = (r1.eax >> 8) & 0xF;
+    let family = if base == 0xF {
+        base + ((r1.eax >> 20) & 0xFF)
+    } else {
+        base
+    };
+    (vendor, family)
+}
+
+static VENDOR_FAMILY: OnceLock<(CpuVendor, u32)> = OnceLock::new();
+
+/// CPU ベンダと family(x86_64 以外では `(Other, 0)`)。
+pub fn vendor_family() -> (CpuVendor, u32) {
+    *VENDOR_FAMILY.get_or_init(|| {
+        #[cfg(target_arch = "x86_64")]
+        {
+            cpuid_vendor_family()
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            (CpuVendor::Other, 0)
+        }
+    })
 }
 
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
@@ -87,6 +149,8 @@ impl CpuCapabilities {
             ("avx512vl", self.avx512vl),
             ("avx-vnni", self.avx_vnni),
             ("avx512vnni", self.avx512vnni),
+            ("gfni", self.gfni),
+            ("vpclmulqdq", self.vpclmulqdq),
         ] {
             if on {
                 v.push(name);
@@ -97,6 +161,26 @@ impl CpuCapabilities {
         } else {
             v.join(" ")
         }
+    }
+
+    /// PEXT / PDEP(BMI2)が **ハードウェア実装で速い** CPU かどうか。
+    ///
+    /// BMI2 の機能ビットが立っていても速いとは限らない。AMD の Zen /
+    /// Zen+ / Zen 2(family 17h)および Hygon Dhyana では PEXT/PDEP が
+    /// マイクロコード実装で非常に遅く、スカラーのループより遅いことが
+    /// 知られている。AMD の最適化ガイド(family 19h = Zen 3)では
+    /// 「ALU でネイティブ実行、スループット 1/cycle・レイテンシ 3 cycle。
+    /// 高速/低速の経路を持つソフトウェアは family 19h では高速側を選ぶこと」
+    /// と明記されており、Zen 3 以降で解消している。
+    ///
+    /// この開発機(Ryzen 9 3950X = Zen 2, family 17h)では **false** を返し、
+    /// スカラー実装が選ばれる(実測でスカラーの方が速いことを確認済み)。
+    pub fn fast_bmi2(&self) -> bool {
+        if !self.bmi2 {
+            return false;
+        }
+        let (vendor, family) = vendor_family();
+        !(vendor == CpuVendor::Amd && family <= 0x17)
     }
 
     /// 指定した機能がすべて有効かどうか(呼び出し側の事前条件チェック用)。

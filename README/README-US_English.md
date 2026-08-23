@@ -199,3 +199,103 @@ present).
 - Migration procedure: [PORTING.md](PORTING-US_English.md)
 - Development policy and HANDOFF: [CLAUDE.md](CLAUDE-US_English.md)
 - GitHub organization: https://github.com/aon-co-jp
+
+
+---
+
+## Update 2026-08-23 — Multi-ISA combination dispatch, plus FMA3/POPCNT/BMI kernels
+
+Real CPUs ship **several instruction sets at once** (AVX2 *and* FMA3;
+AVX-512F *and* BW *and* VNNI). A flat list of booleans forced every caller
+to hand-write "only if both are present" checks, so `open-cpu` now models
+combinations directly. Existing fields such as `caps.avx2` are unchanged,
+so this is backwards compatible.
+
+### New combination API (`src/isa.rs`)
+
+| API | Purpose |
+|---|---|
+| `Feature` | Enum of 17 instruction sets, with string conversion (`Feature::from_name("AVX-VNNI")`) |
+| `FeatureSet` | Bitmask set with `contains_all` / `contains_any` / union / intersection / difference |
+| `CpuCapabilities::supports_all(&[Feature::Avx2, Feature::Fma])` | **The core combination check** |
+| `IsaProfile` | Eight named tiers: `baseline`, `sse2`, `ssse3+pclmul`, `avx2`, `avx2+fma3`, `avx2+fma3+vnni`, `avx512f+bw+vl`, `avx512f+bw+vl+vnni` |
+| `CpuCapabilities::isa_profile()` / `at_least(..)` | Highest satisfied tier / "at least this tier?" |
+| `CpuCapabilities::detected_but_unused()` | Features detected but not yet exploited — keeps the project honest |
+| `select(&[(tag, &[Feature])])` | Pick the first candidate path whose required combination is fully present |
+| `vendor_family()` / `fast_bmi2()` | CPUID vendor+family, and whether `pext`/`pdep` are actually fast here |
+
+```rust
+use open_cpu::{Feature, IsaProfile};
+let caps = open_cpu::detect();
+if caps.supports_all(&[Feature::Avx2, Feature::Fma]) { /* vfmadd path */ }
+if caps.at_least(IsaProfile::Avx512) { /* 512-bit path */ }
+```
+
+The tier model follows llama.cpp's "named variant" approach (a variant is a
+*bundle* of features) rather than a combinatorial matrix of individual flags.
+
+### New arithmetic and bit kernels (`src/math.rs`)
+
+FMA3, POPCNT, BMI1 and BMI2 previously had detection fields but no code
+using them. They now have real implementations, each verified against a
+scalar reference (including non-multiple-of-vector-width lengths).
+
+| API | Dispatch | Measured speedup |
+|---|---|---|
+| `dot_f32(a, b)` | AVX-512F (opt-in) / **AVX2+FMA3** / AVX2 / scalar | **3.17x** (4.23 → 13.40 GFLOP/s) |
+| `axpy_f32(acc, src, scale)` | same | **1.03x** — memory-bandwidth bound, reported honestly |
+| `scale_f32(dst, scale)` | AVX2 / scalar | not separately benchmarked |
+| `popcount_bytes(data)` | POPCNT / scalar | **30.9x** |
+| `hamming_distance(a, b)` | POPCNT / scalar | **11.0x** |
+| `extract_bits` / `deposit_bits` | BMI2 *only if fast* / scalar | see warning below |
+| `trailing_zeros_u64(v)` | BMI1 `tzcnt` / scalar | — |
+
+### ⚠️ A feature bit being set does not mean the instruction is fast
+
+On AMD Zen / Zen+ / Zen 2 (CPUID family 17h) and Hygon Dhyana, `pext` and
+`pdep` are microcoded and dramatically slower than a scalar loop. AMD's
+optimization guide for family 19h (Zen 3) states they became native ALU
+operations (1/cycle throughput, 3-cycle latency) and explicitly advises
+software with fast/slow paths to take the fast path on family 19h.
+
+Measured on this development machine (Ryzen 9 3950X, family 17h):
+
+```
+pext scalar :  177.469 ms
+pext bmi2   : 1268.991 ms   (0.14x — the hardware instruction is 7.1x SLOWER)
+```
+
+Naively writing "BMI2 is available, so use it" would have been a **7x
+performance regression**. `open-cpu` therefore gates `extract_bits` /
+`deposit_bits` on `fast_bmi2()`, which reads CPUID vendor and family.
+Reproduce with `cargo run --release --example bench`.
+
+### Detection-only additions
+
+`gfni` and `vpclmulqdq` are now detected. Intel ISA-L 2.32 moved GF(2^8)
+multiply to GFNI (`vgf2p8mulb`) and CRC to VPCLMULQDQ, which is the clear
+next step for this crate's RAID6 kernels — but this machine has neither, so
+no kernels were written for them rather than shipping unverifiable code.
+
+### Test status
+
+`cargo test --release`: **28 unit tests + 5 doctests pass, zero warnings.**
+
+### Adopters after this change
+
+| Repository | Usage |
+|---|---|
+| `open-raid-z` | GF(2^8), XOR and Horner kernels delegated here (47 tests, no regression) |
+| `open-cuda` | `opencuda-blas` detection unified here; two real dispatch bugs fixed |
+| `aruaru-llm` | `GET /v1/runtime` now reports the selected CPU SIMD combination |
+| `open-english` | `GET /v1/cpu-runtime` reports combinations — **display only**, no hot loop exists there |
+| `open-cg-cad` | Cross-section derivative rewritten via `axpy_f32`, **105.6x faster at n=2000** |
+
+`open-fudousan` and `open-koumuten` were investigated and found to have no
+CPU-bound work at all (small CRUD/web apps); no dependency was added there.
+
+> Honesty note: figures above are measured on the development machine
+> (AMD Ryzen 9 3950X, Zen 2). **AVX-512, AVX-VNNI, AVX-512 VNNI, GFNI and
+> VPCLMULQDQ paths remain unverified on real hardware** because this CPU
+> does not have them. AVX-512 code paths are never selected by default;
+> they require `OPEN_CPU_ENABLE_AVX512=1`.

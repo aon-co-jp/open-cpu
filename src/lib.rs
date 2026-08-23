@@ -35,8 +35,20 @@
 
 mod caps;
 mod gf;
+mod isa;
+mod math;
 
-pub use caps::{detect, CpuCapabilities};
+pub use caps::{detect, vendor_family, CpuCapabilities, CpuVendor};
+pub use isa::{
+    avx512_opt_in, implemented_features, isa_summary, select, Feature, FeatureSet, IsaProfile,
+    ALL_FEATURES, ALL_PROFILES,
+};
+pub use math::{
+    axpy_f32, axpy_f32_scalar, bit_impl_summary, deposit_bits, deposit_bits_scalar, dot_f32,
+    dot_f32_scalar, extract_bits, extract_bits_scalar, hamming_distance, hamming_distance_scalar,
+    popcount_bytes, popcount_bytes_scalar, scale_f32, selected_float_impl, trailing_zeros_u64,
+    FloatImpl,
+};
 pub use gf::{
     gf_mul, gf_mul2_byte, gf_mul2_xor, gf_mul4_xor, gf_mul_parity, gf_mul_parity_scalar,
     gf_mul_pow2_xor, gf_mul_pow2_xor_scalar, gf_xor, gf_xor_scalar, raid6_coeff, raid6_parity,
@@ -56,6 +68,28 @@ pub fn runtime_summary() -> String {
         VERSION,
         detect().summary(),
         selected_impl()
+    )
+}
+
+/// 検出・組み合わせプロファイル・各カーネルの選択実装をまとめた複数行サマリ。
+pub fn runtime_report() -> String {
+    let caps = detect();
+    format!(
+        "open-cpu {}
+  features: {}
+  isa profile: {} (raw: {})
+  gf impl: {:?}
+  float impl: {}
+  {}
+  detected-but-unused: {}",
+        VERSION,
+        caps.feature_set(),
+        caps.isa_profile(),
+        caps.isa_profile_raw(),
+        selected_impl(),
+        selected_float_impl(),
+        bit_impl_summary(),
+        caps.detected_but_unused()
     )
 }
 
