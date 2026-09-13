@@ -30,10 +30,18 @@
 //!   既定のディスパッチでは選択されず、`OPEN_CPU_ENABLE_AVX512=1` で opt-in する。
 //! - BMI1/BMI2/FMA/AES/POPCNT/SHA/AVX-VNNI/AVX-512 VNNI は
 //!   **検出フィールドのみ**で、これらを使う演算実装はまだ無い。
+//! - [`gather_u8`]/[`gather_u8_avx2`](2026-09-13追加): `open-directx`の
+//!   FFv1レンジコーダー実装(GPU側でNレーンが並列にテーブル値を
+//!   lookupする設計、実GT730ハードウェアで32〜1536レーン検証済み)の
+//!   CPU-SIMD側対応物として、AVX2の`vpgatherdd`によるバッチテーブル
+//!   ルックアップを実装(この開発機・AMD Ryzen 9 3950Xで実行検証済み)。
+//!   AVX-512版(16-wide gather)は、この開発機がAVX-512非搭載のため
+//!   `gf.rs`のAVX-512パスと同じ理由で未実装。
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 mod caps;
+mod gather;
 mod gf;
 mod isa;
 mod math;
@@ -57,6 +65,10 @@ pub use gf::{
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub use gf::{gf_mul_parity_avx2, gf_mul_parity_avx512, gf_mul_parity_pclmul};
+
+pub use gather::{gather_u8, gather_u8_scalar};
+#[cfg(target_arch = "x86_64")]
+pub use gather::gather_u8_avx2;
 
 /// クレートのバージョン文字列。
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

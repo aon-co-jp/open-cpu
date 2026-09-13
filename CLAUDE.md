@@ -298,3 +298,24 @@ Ukraine / Hebrew / Persian(Iran) / Arabic / China / Taiwan / Korea / Japan。
 - 次にすべきこと: 変更なし(AVX-512/VNNI経路が実機未検証である点を含め、
   既存のHANDOFFの課題がそのまま残る)。
 
+
+## HANDOFF追記(2026-09-13) gather_u8/gather_u8_avx2を追加(open-directxのFFv1レンジコーダー並列化とのCPU-SIMD対応関係を実装)
+
+`open-directx`側でFFv1レンジコーダーの32〜1536レーン並列化(GPU側の
+ワークグループ共有メモリ+バリア方式、実GT730ハードウェア検証済み)を
+実装した際、ユーザーから「この設計はAVX2/AVX512のgather命令と関連が
+あるのでは」という指摘があり、実際にコードとして検証した。新規
+`src/gather.rs`: `gather_u8_avx2`(`_mm256_i32gather_epi32`による
+8-wideバッチルックアップ、u8テーブルはi32へゼロ拡張してからgather)を
+実装し、この開発機(AMD Ryzen 9 3950X)で実行検証(スカラー参照実装と
+256/512要素テーブルで完全一致)。`gather_u8`で`detect()`に応じた
+実行時ディスパッチも提供。詳細は`PORTING.md`参照。
+
+**正直な開示**: AVX-512版(16-wide)は開発機がAVX-512非搭載のため未実装
+(`gf.rs`のAVX-512パスと同じ制約)。FFv1レンジコーダー本体
+(`open-directx::range_coder`)をこの関数で実際に置き換える統合作業は
+未実施——今回はアイデアの実証コードとして`open-cpu`単体で完結させた。
+
+`cargo test`: 全緑(35件)。`cargo clippy --all-targets -- -D
+warnings`: 新規コードはクリーン、既存の無関係な`isa.rs`/`math.rs`の
+3件のみ残存(未変更ファイル・既存lintであることを確認済み)。

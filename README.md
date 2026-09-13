@@ -21,6 +21,25 @@
 > [`CLAUDE.md`](CLAUDE.md) / [`PORTING.md`](PORTING.md) についても
 > `README/` フォルダに用意している。
 
+> 📌 **最近の更新(2026-09-13)**: `open-directx`のFFv1レンジコーダー
+> 並列化(GPU側でNレーンが並列にテーブル値をlookupする設計、実GT730
+> ハードウェアで32〜1536レーン検証済み)とAVX2/AVX-512のgather命令
+> (`vpgatherdd`)が技術的に対応する、というアイデアを実際にコードとして
+> 実装した(`gather_u8`/`gather_u8_avx2`)。AVX2版はこの開発機
+> (AMD Ryzen 9 3950X)で実行検証済み(スカラー参照実装と完全一致)。
+> AVX-512版は開発機が非搭載のため未実装。詳細は
+> [PORTING.md](PORTING.md)・[CLAUDE.md](CLAUDE.md)参照。
+>
+> *English*: Implemented, as real code (not just an idea), the
+> technical connection between `open-directx`'s FFv1 range-coder
+> parallelization (N GPU lanes looking up table values in parallel,
+> verified on real GT730 hardware at 32–1536 lanes) and AVX2/AVX-512
+> gather instructions (`vpgatherdd`) — `gather_u8`/`gather_u8_avx2`.
+> The AVX2 path is executed and verified on this dev machine (AMD
+> Ryzen 9 3950X), matching the scalar reference exactly. The AVX-512
+> path is unimplemented (this machine lacks AVX-512). See
+> [PORTING.md](PORTING.md) / [CLAUDE.md](CLAUDE.md) for details.
+
 `aon-co-jp` エコシステム共通の **CPU 命令セット検出・ランタイムディスパッチ
 ライブラリ**(Rust)。
 

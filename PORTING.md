@@ -129,3 +129,39 @@ ZFS RAID-Z と同一。**移行前に、自リポジトリの多項式・生成�
   (検出部分だけを先に移行するのは可能)。
 - x86 以外(ARM 等)では全機能が `false` になりスカラー実装へ落ちる。
   クロスビルドは通るが、NEON 等の最適化は未対応。
+
+## `gather_u8`/`gather_u8_avx2`(2026-09-13追加): open-directxのFFv1レンジコーダー並列lookupのCPU-SIMD対応物
+
+`open-directx`(`directx-shader-translate::range_coder`)が実装した
+FFv1レンジコーダーの並列化(GPU側でNレーンのinvocationが並列に1個ずつ
+テーブル値をlookupし、1レーンだけが逐次処理を行う設計、実GT730
+ハードウェアで32〜1536レーンまで検証済み)と、AVX2/AVX-512の
+**gather命令**(1命令で複数の異なるインデックスからテーブル値を
+まとめて読む)が技術的に対応する、というアイデアを実際にコードとして
+実装した。
+
+- `gather_u8_scalar`: スカラー参照実装。
+- `gather_u8_avx2`(`#[target_feature(enable = "avx2")]`の`unsafe fn`):
+  `_mm256_i32gather_epi32`で8個のインデックスを1命令でバッチ処理。
+  u8テーブルはあらかじめi32へゼロ拡張してからgatherする(AVX2に
+  8bit要素の直接gather命令が無いため)。範囲外インデックスは
+  テーブル末尾のパディング(値0)へクランプすることで安全に処理する。
+  **この開発機(AMD Ryzen 9 3950X)で実行検証済み**——`gather_u8`
+  経由の単体テスト、および`detect().avx2`確認後の直接呼び出しテスト
+  の両方で、256/512要素(FFv1の`one_state`/`zero_state`/
+  `zero_one_state`と同規模)のテーブルに対しスカラー参照実装と完全一致。
+- `gather_u8`: `detect()`に応じてAVX2/スカラーへ実行時ディスパッチする
+  公開API。
+
+**正直な開示**: AVX-512版(16-wide `vpgatherdd`)は、`gf.rs`のAVX-512
+パスと同じ理由(この開発機がAVX-512非搭載)で未実装——将来AVX-512機で
+追加する際の設計メモとして、この制約をここに記録する。また、これは
+汎用のバッチテーブルルックアップ・プリミティブであり、FFv1レンジ
+コーダーの状態遷移テーブル自体(`open-directx::range_coder`)をこの
+関数経由で実際に置き換える統合作業はまだ行っていない(アイデアの
+実証コードとして`open-cpu`単体で完結させた)。
+
+`cargo test`: 全緑(35件、既存30+新規5)。`cargo clippy --all-targets
+-- -D warnings`: 新規コード(`gather.rs`)はクリーン、既存の無関係な
+`isa.rs`/`math.rs`の3件のみ残存(このセッションで変更していないファイル・
+既存のlintであることを確認済み)。
