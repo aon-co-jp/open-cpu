@@ -165,3 +165,9 @@ FFv1レンジコーダーの並列化(GPU側でNレーンのinvocationが並列�
 -- -D warnings`: 新規コード(`gather.rs`)はクリーン、既存の無関係な
 `isa.rs`/`math.rs`の3件のみ残存(このセッションで変更していないファイル・
 既存のlintであることを確認済み)。
+
+## 追記(2026-09-21): aarch64(Android)へのクロスビルドと実機実行 / Cross-building for aarch64 (Android) and running on a device
+
+**日本語**: `rustup target add aarch64-linux-android`後、NDKのリンカーを環境変数で指定する: `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=<ndk>/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android24-clang.cmd`。`cargo build --release --example inventory --target aarch64-linux-android`→`adb push`→`/data/local/tmp`で`chmod 755`して実行(`--json`でJSON)。
+
+**English**: After `rustup target add aarch64-linux-android`, set `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=<ndk>/toolchains/llvm/prebuilt/windows-x86_64/bin/aarch64-linux-android24-clang.cmd`. Then `cargo build --release --example inventory --target aarch64-linux-android`, `adb push` to `/data/local/tmp`, `chmod 755` and run (`--json` for JSON).

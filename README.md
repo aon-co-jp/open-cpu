@@ -340,3 +340,11 @@ cargo run --release --example bench
 - 移行手順: [PORTING.md](PORTING.md)
 - 開発方針・HANDOFF: [CLAUDE.md](CLAUDE.md)
 - GitHub organization: https://github.com/aon-co-jp
+
+## CPU命令セットの全自動インベントリ(2026-09-21追加) / Automatic CPU feature inventory (added 2026-09-21)
+
+**日本語**: `open_cpu::inventory()`が、x86/x86_64(SSE〜AVX-512各サブセット、AVX-VNNI、GFNI、VAES、BMI、SHA、AES等)とaarch64(NEON・FP16・dotprod・i8mm・bf16・SVE/SVE2・AES/PMULL/SHA・CRC32・LSE等)の命令を自動検出し、Linux/Androidでは`/proc/cpuinfo`から生フラグとコア構成(big.LITTLE、Qualcomm Kryoを含む)も取得する。`cargo run --example inventory`で表示。
+検出は「CPUが持つ命令」であり、open-cpuのカーネルが使うか(`used_by_open_cpu`)とは別。ARM向け専用カーネルはまだ無い(検出のみ)。実機: OPPO Reno11 A(Cortex-A55x6+A78x2)、moto g53y(Kryo 4xx Silver x6+Gold x2)で確認済み。
+
+**English**: `open_cpu::inventory()` auto-detects x86/x86_64 (SSE..AVX-512 subsets, AVX-VNNI, GFNI, VAES, BMI, SHA, AES...) and aarch64 (NEON, FP16, dotprod, i8mm, bf16, SVE/SVE2, AES/PMULL/SHA, CRC32, LSE...) features; on Linux/Android it also reads raw flags and the core layout (big.LITTLE, incl. Qualcomm Kryo) from `/proc/cpuinfo`. Run `cargo run --example inventory`.
+Detection means "the CPU has the instruction", separate from whether open-cpu kernels use it (`used_by_open_cpu`). No ARM-specific kernels yet. Verified on real devices: OPPO Reno11 A (Cortex-A55x6 + A78x2), moto g53y (Kryo 4xx Silver x6 + Gold x2).

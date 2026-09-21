@@ -319,3 +319,11 @@ Ukraine / Hebrew / Persian(Iran) / Arabic / China / Taiwan / Korea / Japan。
 `cargo test`: 全緑(35件)。`cargo clippy --all-targets -- -D
 warnings`: 新規コードはクリーン、既存の無関係な`isa.rs`/`math.rs`の
 3件のみ残存(未変更ファイル・既存lintであることを確認済み)。
+
+## HANDOFF追記(2026-09-21、CPU命令インベントリの新設) / HANDOFF addendum (2026-09-21, CPU inventory)
+
+**日本語**: ユーザー指示「スマホのCPUもopen-cpuでAVX2/AVX512を始め全命令を全自動確認」に対応し、`src/inventory.rs`を新設(`inventory()`/`CpuInventory`/`FeatureStatus`/`CoreGroup`、依存無しのJSON出力`to_json()`)。`is_x86_feature_detected!`/`is_aarch64_feature_detected!`(マクロ引数は`literal`ではなく`tt`)+`/proc/cpuinfo`(`CPU implementer`/`CPU part`でコア名を判定)。aruaru-llmの`/v1/runtime`(`cpu_simd`)へ公開済み。
+**未対応**: ARM(NEON/dotprod)向けの演算カーネル、SVE検出の実機確認。**次**: aarch64向けdotprodカーネルと、open-cudaの能力交渉層との接続。
+
+**English**: Added `src/inventory.rs` (`inventory()`/`CpuInventory`/`FeatureStatus`/`CoreGroup`, dependency-free `to_json()`). Uses `is_x86_feature_detected!`/`is_aarch64_feature_detected!` (macro args must be `tt`, not `literal`) + `/proc/cpuinfo` (`CPU implementer`/`CPU part` → core names). Exposed via aruaru-llm `/v1/runtime` (`cpu_simd`).
+**Not done**: ARM (NEON/dotprod) kernels, SVE on real hardware. **Next**: an aarch64 dotprod kernel and hookup to open-cuda's capability negotiation.
