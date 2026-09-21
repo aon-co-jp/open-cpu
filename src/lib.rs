@@ -42,11 +42,13 @@
 
 mod caps;
 mod gather;
+mod inventory;
 mod gf;
 mod isa;
 mod math;
 
 pub use caps::{detect, vendor_family, CpuCapabilities, CpuVendor};
+pub use inventory::{inventory, CoreGroup, CpuInventory, FeatureStatus};
 pub use isa::{
     avx512_opt_in, implemented_features, isa_summary, select, Feature, FeatureSet, IsaProfile,
     ALL_FEATURES, ALL_PROFILES,
