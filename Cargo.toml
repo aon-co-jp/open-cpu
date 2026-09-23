@@ -9,10 +9,21 @@ repository = "https://github.com/aon-co-jp/open-cpu"
 [lib]
 name = "open_cpu"
 path = "src/lib.rs"
+# 2026-09-23追加(ユーザー指示「APKビルド時にjniLibsとして同梱して下さい
+# 〈NNAPIプローブと同じ経路〉」): AndroidアプリがJNI経由でロードできる
+# よう`cdylib`を追加(通常のRust依存としての利用〈`rlib`〉は維持)。
+crate-type = ["rlib", "cdylib"]
 
 [[example]]
 name = "bench"
 path = "examples/bench.rs"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Android向けcdylibビルド時のみ必要(JNIエクスポート関数、src/android_jni.rs)。
+# 通常のcargo依存としての利用〈x86_64開発機でのcargo test/build等〉では
+# このターゲット条件に一致せずビルドされないため、既存の依存関係グラフを
+# 汚さない。
+jni = "0.21"
 
 [dependencies]
 

@@ -47,6 +47,9 @@ mod gf;
 mod isa;
 mod math;
 
+#[cfg(target_os = "android")]
+mod android_jni;
+
 pub use caps::{detect, vendor_family, CpuCapabilities, CpuVendor};
 pub use inventory::{inventory, CoreGroup, CpuInventory, FeatureStatus};
 pub use isa::{
