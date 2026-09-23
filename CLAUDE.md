@@ -327,3 +327,17 @@ warnings`: 新規コードはクリーン、既存の無関係な`isa.rs`/`math.
 
 **English**: Added `src/inventory.rs` (`inventory()`/`CpuInventory`/`FeatureStatus`/`CoreGroup`, dependency-free `to_json()`). Uses `is_x86_feature_detected!`/`is_aarch64_feature_detected!` (macro args must be `tt`, not `literal`) + `/proc/cpuinfo` (`CPU implementer`/`CPU part` → core names). Exposed via aruaru-llm `/v1/runtime` (`cpu_simd`).
 **Not done**: ARM (NEON/dotprod) kernels, SVE on real hardware. **Next**: an aarch64 dotprod kernel and hookup to open-cuda's capability negotiation.
+
+## HANDOFF追記(2026-09-23、NEON実カーネル新設・5ヶ国語) / HANDOFF (NEON kernels) / 手册追记(NEON内核) / 手冊追記(NEON核心) / HANDOFF-Ergänzung (NEON-Kernels)
+
+**日本語**: ユーザー指示「スマホのコア構成やVPSのAVX512フルセットやローカルPCのAVX2やFMA3などの機能をフルで活かせるように改善改良して機能搭載して」への対応。これまでaarch64(スマホ)は`inventory()`による命令セット検出のみで、実際の演算カーネル(`math.rs`)はすべてスカラー止まりだった。`dot_f32`/`axpy_f32`/`popcount_bytes`/`hamming_distance`にNEON実装(`vfmaq_f32`/`vcntq_u8`+`vaddlvq_u8`)を追加し、実機(arrows We2 PLUS M06)でdot_f32が2.83倍高速化することを確認した。あわせて`bit_impl_summary()`がARMでは常に「popcount: scalar」と誤表示していた(実際はNEON経由で2倍以上速いのに)不整合を発見・修正。x86_64(VPS/PC)側のAVX-512/AVX2+FMA3は既に実装済みで、今回VPS(Xeon Icelake)・ローカルPC(AMD Zen)・スマホ(Snapdragon)の3環境で実機ベンチマークを取り、いずれも正しくディスパッチされていることを確認した。
+
+**English**: Per user instruction to actually leverage detected hardware (phone's core config, VPS's full AVX-512, local PC's AVX2/FMA3) instead of only reporting it. aarch64 previously had detection only; added real NEON kernels for dot_f32/axpy_f32/popcount_bytes/hamming_distance, verified 2.83x speedup live on a real Fujitsu arrows We2 PLUS M06. Also found and fixed a mismatch where bit_impl_summary() always printed "popcount: scalar" on ARM even while NEON was already accelerating it. x86_64 (VPS/PC) AVX-512/AVX2+FMA3 paths were already implemented; this session benchmarked all three real environments (VPS Xeon Icelake, local AMD PC, phone Snapdragon) and confirmed correct dispatch on each.
+
+**简体中文**: 根据用户指示"充分利用手机的核心配置、VPS的完整AVX512指令集、本地PC的AVX2和FMA3等功能"而非仅仅报告它们。此前aarch64(手机)仅有指令集检测功能,`math.rs`中的实际计算内核全部停留在标量实现。为`dot_f32`/`axpy_f32`/`popcount_bytes`/`hamming_distance`添加了NEON实现,在真机(arrows We2 PLUS M06)上验证dot_f32提速2.83倍。同时发现并修复了`bit_impl_summary()`在ARM上始终错误显示"popcount: scalar"的问题(实际已通过NEON提速2倍以上)。
+
+**繁體中文**: 根據使用者指示「充分利用手機的核心配置、VPS的完整AVX512指令集、本機PC的AVX2和FMA3等功能」而非僅僅回報它們。此前aarch64(手機)僅有指令集偵測功能,`math.rs`中的實際運算核心全部停留在純量實作。為`dot_f32`/`axpy_f32`/`popcount_bytes`/`hamming_distance`新增了NEON實作,在實機(arrows We2 PLUS M06)上驗證dot_f32提速2.83倍。同時發現並修正了`bit_impl_summary()`在ARM上始終錯誤顯示「popcount: scalar」的問題。
+
+**Deutsch**: Gemäß Benutzeranweisung, die erkannte Hardware (Kernkonfiguration des Telefons, vollständiger AVX-512-Satz des VPS, AVX2/FMA3 des lokalen PCs) tatsächlich zu nutzen statt sie nur zu melden. aarch64 (Telefon) hatte zuvor nur Erkennung; echte NEON-Kernel für dot_f32/axpy_f32/popcount_bytes/hamming_distance hinzugefügt, live auf einem echten Fujitsu arrows We2 PLUS M06 eine 2,83-fache Beschleunigung bestätigt. Zudem eine Inkonsistenz in bit_impl_summary() gefunden und behoben, die auf ARM immer "popcount: scalar" anzeigte, obwohl NEON bereits beschleunigte.
+
+**正直な開示/Honest disclosure**: このHANDOFF追記はトップレベルのCLAUDE.md(日本語正本)にのみ5ヶ国語で追記した。`README/`配下の言語別フル翻訳ファイル(14ヶ国語、README-China.md等)への反映は今回のスコープ外(既存の全文翻訳を都度追従させる運用は別途必要)。
