@@ -12,6 +12,20 @@ name: Release diagnostic binaries
 # (bench)の2本のみ——ライブラリ本体のAPIをこのリリースで配布するわけではない
 # (cargo経由のpath依存/crates.io相当としての利用はこれまで通り)。macOS向け
 # ビルドはこのCIにまだ無い(aruaru-llm/aruaru-dbと同じ既知の制約)。
+#
+# 2026-09-23追加(Android/arm64、ユーザー指示「Android向け診断バイナリの
+# CI対応に着手して」への対応): 富士通arrows We2 PLUS M06実機(Snapdragon
+# SM7435)での検証で使ったのと同じ`cargo-ndk`クロスコンパイル手順をCI化。
+# **正直な開示**: このzipに入るのはあくまで`adb push`等で手動配置して
+# `adb shell`から実行するための単体ELFバイナリであり、Androidアプリ
+# (open-english mobile等)がAPKに同梱したり実行時にダウンロードして自動
+# 実行したりする経路はまだ無い——Android 10+はアプリの書き込み可能領域
+# (`/data/data/...`)へ置いたファイルの実行を原則ブロックする(W^X/
+# noexec)ため、component_update.rs方式(デスクトップ版の「ダウンロード
+# →配置→1回実行して確認」)をそのままAndroidへ持ち込むことはできない。
+# アプリ組み込みが必要になった場合は、`jniLibs`としてAPKビルド時に
+# 同梱する(今回のNNAPIプローブと同じ経路)か、JNI経由で呼び出す設計に
+# する必要がある。
 
 on:
   push:
@@ -60,9 +74,43 @@ jobs:
           name: open-cpu-diag-windows-x86_64
           path: open-cpu-diag-windows-x86_64.zip
 
+  build-android:
+    name: Android (aarch64, arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust Android target
+        run: rustup target add aarch64-linux-android
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+      - name: Build diagnostic CLIs (arm64-v8a)
+        env:
+          # ubuntu-latest runnerに既定でインストール済みのNDKを使う
+          # (Android SDK Command-line Tools経由、`ANDROID_NDK_HOME`は
+          # actions/setup-android等を使わなくてもGitHub提供イメージに
+          # 通常同梱されている、2026-09-23実機接続時と同じcargo-ndk手順)。
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+        # `-o <dir>`(jniLibsへのコピー)は付けない: cdylibターゲットが
+        # 無い(exampleバイナリのみの)このクレートでは、コピー対象の
+        # 共有ライブラリが無く`cargo ndk`が非ゼロ終了する実バグを
+        # ローカル検証で踏んだ(2026-09-23)。examplesは`-o`無しでも
+        # `target/aarch64-linux-android/release/examples/`へ通常どおり
+        # 出力されるため、`-o`自体が不要。
+        run: cargo ndk -t arm64-v8a build --release --example inventory --example bench
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/aarch64-linux-android/release/examples/inventory dist/open-cpu-inventory
+          cp target/aarch64-linux-android/release/examples/bench dist/open-cpu-bench
+          tar -czf open-cpu-diag-android-arm64.tar.gz -C dist open-cpu-inventory open-cpu-bench
+      - uses: actions/upload-artifact@v4
+        with:
+          name: open-cpu-diag-android-arm64
+          path: open-cpu-diag-android-arm64.tar.gz
+
   release:
     name: GitHub Releaseへ添付
-    needs: [build-linux, build-windows]
+    needs: [build-linux, build-windows, build-android]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -72,3 +120,4 @@ jobs:
           files: |
             open-cpu-diag-linux-x86_64/open-cpu-diag-linux-x86_64.tar.gz
             open-cpu-diag-windows-x86_64/open-cpu-diag-windows-x86_64.zip
+            open-cpu-diag-android-arm64/open-cpu-diag-android-arm64.tar.gz
