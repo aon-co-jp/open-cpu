@@ -4,7 +4,19 @@
 //! - x86/x86_64: SSE〜AVX-512 各サブセット・AVX-VNNI・AMX相当・GFNI・VAES・BMI・SHA・AES 等を
 //!   `is_x86_feature_detected!` で確認。
 //! - aarch64(スマホ/タブレット/Apple Silicon 等): NEON(asimd)・FP16・dotprod・i8mm・bf16・SVE/SVE2・
-//!   AES/PMULL/SHA2/SHA3・CRC32・LSE(atomics)・RCpc 等を `is_aarch64_feature_detected!` で確認。
+//!   AES/PMULL/SHA2(rustcの仕様上、この1機能名でSHA1とSHA256の両方を表す——後述)/SHA3・
+//!   CRC32・LSE(atomics)・RCpc 等を `is_aarch64_feature_detected!` で確認。
+//!
+//! **2026-09-23実機発見の落とし穴**: `/proc/cpuinfo`の`Features`行には`sha1`という個別の
+//! フラグが立つ(実機: 富士通 arrows We2 PLUS M06 / Snapdragon SM7435で確認)が、
+//! rustcの`is_aarch64_feature_detected!`マクロには`"sha1"`という機能名自体が存在せず
+//! (`rustc --print target-features`で確認可能)、`"sha2"`のコンパイラ側の定義が
+//! 「SHA1とSHA256の両方の命令を有効化する」という意味になっている(ARMv8-Aの
+//! Cryptographic Extension仕様上、SHA1とSHA256は常にセットで実装されるため)。
+//! つまり`detected`一覧の`sha2`が立っていれば、それだけでSHA1命令も使える——
+//! `raw_flags`(procfs由来の生の`sha1`/`sha2`フラグ)と`features`(rustcの機能名)を
+//! 単純に1対1で突き合わせようとすると「sha1が無い」ように見えて混乱するので、
+//! ここに明記しておく。
 //! - Linux/Android: `/proc/cpuinfo` の生フラグ(`Features`/`flags`)と、aarch64 の CPU part から
 //!   コア構成(例: Cortex-A78×2 + Cortex-A55×6)も取得する(big.LITTLE の把握用)。
 //!
@@ -237,6 +249,44 @@ Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpui
         let (flags, cores) = parse_cpuinfo(sample);
         assert!(flags.contains(&"asimddp".to_string()));
         assert_eq!(cores, vec![CoreGroup { name: "Cortex-A55".into(), count: 2 }, CoreGroup { name: "Cortex-A78".into(), count: 1 }]);
+    }
+
+    #[test]
+    fn parse_cpuinfo_arrows_we2_plus_m06_sample() {
+        // 実機(富士通 arrows We2 PLUS M06 / Snapdragon SM7435、2026-09-23実機接続テストで採取)由来。
+        // procfsの生フラグに"sha1"が単独で立つことを確認する回帰テスト——rustcの
+        // `is_aarch64_feature_detected!`には"sha1"という機能名自体が存在せず"sha2"が
+        // SHA1+SHA256の両方を表す(モジュール冒頭のコメント参照)ため、`raw_flags`側でだけ
+        // 素のprocfs値として観測できることを担保しておく。
+        let sample = "processor\t: 0
+BogoMIPS\t: 38.40
+Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer\t: 0x41
+CPU architecture: 8
+CPU variant\t: 0x2
+CPU part\t: 0xd05
+CPU revision\t: 0
+
+processor\t: 4
+BogoMIPS\t: 38.40
+Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer\t: 0x41
+CPU architecture: 8
+CPU variant\t: 0x0
+CPU part\t: 0xd41
+CPU revision\t: 0
+";
+        // 8コア分(A55x4 + A78x4)を模した`CPU part`行を追加する(1コア目はFeatures直後に既出)。
+        let mut sample = sample.to_string();
+        for _ in 0..3 {
+            sample.push_str("CPU part\t: 0xd05\n");
+        }
+        for _ in 0..3 {
+            sample.push_str("CPU part\t: 0xd41\n");
+        }
+        let (flags, cores) = parse_cpuinfo(&sample);
+        assert!(flags.contains(&"sha1".to_string()), "sha1 must be present in the raw flags captured from this real device");
+        assert_eq!(cores, vec![CoreGroup { name: "Cortex-A55".into(), count: 4 }, CoreGroup { name: "Cortex-A78".into(), count: 4 }]);
     }
 
     #[test]
