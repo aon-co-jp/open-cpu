@@ -1,0 +1,74 @@
+name: Release diagnostic binaries
+
+# タグ(例: v0.1.0)をpushすると、open-cpuの診断CLI(`inventory`/`bench`
+# example)をLinux(x86_64-unknown-linux-gnu)・Windows(x86_64)向けに
+# ビルドし、GitHub Releasesへ添付する(2026-09-23新設、ユーザー指示
+# 「open-cpu/open-directx/open-cudaも診断ツールとしてopen-englishへ同梱し、
+# 個別に自動バージョンアップできるように」への対応、aruaru-llm/aruaru-db
+# 向けrelease.ymlと同じ構成を踏襲)。
+#
+# 正直な開示: open-cpuはライブラリなので、リリースするのは「そのCPUの
+# 命令セット対応状況を表示する診断CLI」(inventory)と「簡易ベンチマークCLI」
+# (bench)の2本のみ——ライブラリ本体のAPIをこのリリースで配布するわけではない
+# (cargo経由のpath依存/crates.io相当としての利用はこれまで通り)。macOS向け
+# ビルドはこのCIにまだ無い(aruaru-llm/aruaru-dbと同じ既知の制約)。
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Linux (x86_64-unknown-linux-gnu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build diagnostic CLIs
+        run: cargo build --release --example inventory --example bench
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/examples/inventory dist/open-cpu-inventory
+          cp target/release/examples/bench dist/open-cpu-bench
+          tar -czf open-cpu-diag-linux-x86_64.tar.gz -C dist open-cpu-inventory open-cpu-bench
+      - uses: actions/upload-artifact@v4
+        with:
+          name: open-cpu-diag-linux-x86_64
+          path: open-cpu-diag-linux-x86_64.tar.gz
+
+  build-windows:
+    name: Windows (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build diagnostic CLIs
+        run: cargo build --release --example inventory --example bench
+      - name: Package portable zip (open-cpu-diag-windows-x86_64.zip)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-zip | Out-Null
+          Copy-Item target\release\examples\inventory.exe dist-zip\open-cpu-inventory.exe
+          Copy-Item target\release\examples\bench.exe dist-zip\open-cpu-bench.exe
+          Compress-Archive -Path dist-zip\open-cpu-inventory.exe,dist-zip\open-cpu-bench.exe -DestinationPath open-cpu-diag-windows-x86_64.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: open-cpu-diag-windows-x86_64
+          path: open-cpu-diag-windows-x86_64.zip
+
+  release:
+    name: GitHub Releaseへ添付
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            open-cpu-diag-linux-x86_64/open-cpu-diag-linux-x86_64.tar.gz
+            open-cpu-diag-windows-x86_64/open-cpu-diag-windows-x86_64.zip
