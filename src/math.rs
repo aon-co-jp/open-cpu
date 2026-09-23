@@ -26,6 +26,12 @@ pub enum FloatImpl {
     Avx2Fma,
     /// AVX-512F(**この開発機では実行未検証**、`OPEN_CPU_ENABLE_AVX512=1` で opt-in)。
     Avx512,
+    /// aarch64 NEON(`vfmaq_f32`、2026-09-23新設——ユーザー指示「スマホの
+    /// コア構成やVPSのAVX512フルセットやローカルPCのAVX2やFMA3などの機能を
+    /// フルで活かせるように」への対応。ARMv8-AはNEONが必須実装のため
+    /// 検出フラグ確認は形式的だが、他アーキテクチャと同じ「検出してから
+    /// 使う」設計を崩さないため`is_aarch64_feature_detected!`は維持する)。
+    Neon,
 }
 
 impl std::fmt::Display for FloatImpl {
@@ -35,6 +41,7 @@ impl std::fmt::Display for FloatImpl {
             FloatImpl::Avx2 => "avx2",
             FloatImpl::Avx2Fma => "avx2+fma3",
             FloatImpl::Avx512 => "avx512f",
+            FloatImpl::Neon => "neon",
         })
     }
 }
@@ -52,6 +59,12 @@ pub fn selected_float_impl() -> FloatImpl {
         }
         if caps.avx2 {
             return FloatImpl::Avx2;
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            return FloatImpl::Neon;
         }
     }
     FloatImpl::Scalar
@@ -73,7 +86,13 @@ pub fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
             FloatImpl::Avx512 => return unsafe { dot_f32_avx512(a, b) },
             FloatImpl::Avx2Fma => return unsafe { dot_f32_avx2_fma(a, b) },
             FloatImpl::Avx2 => return unsafe { dot_f32_avx2(a, b) },
-            FloatImpl::Scalar => {}
+            FloatImpl::Scalar | FloatImpl::Neon => {}
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        if selected_float_impl() == FloatImpl::Neon {
+            return unsafe { dot_f32_neon(a, b) };
         }
     }
     dot_f32_scalar(a, b)
@@ -109,7 +128,13 @@ pub fn axpy_f32(acc: &mut [f32], src: &[f32], scale: f32) {
             FloatImpl::Avx512 => return unsafe { axpy_f32_avx512(acc, src, scale) },
             FloatImpl::Avx2Fma => return unsafe { axpy_f32_avx2_fma(acc, src, scale) },
             FloatImpl::Avx2 => return unsafe { axpy_f32_avx2(acc, src, scale) },
-            FloatImpl::Scalar => {}
+            FloatImpl::Scalar | FloatImpl::Neon => {}
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        if selected_float_impl() == FloatImpl::Neon {
+            return unsafe { axpy_f32_neon(acc, src, scale) };
         }
     }
     axpy_f32_scalar(acc, src, scale)
@@ -134,6 +159,69 @@ pub fn scale_f32(dst: &mut [f32], scale: f32) {
     }
     for d in dst.iter_mut() {
         *d *= scale;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// aarch64 NEON(2026-09-23新設)
+// ---------------------------------------------------------------------------
+
+/// `dot_f32`のNEON実装。128bitレーン(f32×4)を2本並列に累積してから
+/// 水平加算する(x86 AVX2版の「2アキュムレータで依存関係を切る」構成を
+/// NEONへ移植)。
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn dot_f32_neon(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::aarch64::*;
+    unsafe {
+        let n = a.len();
+        let mut acc0 = vdupq_n_f32(0.0);
+        let mut acc1 = vdupq_n_f32(0.0);
+        let mut i = 0;
+        while i + 8 <= n {
+            let va0 = vld1q_f32(a.as_ptr().add(i));
+            let vb0 = vld1q_f32(b.as_ptr().add(i));
+            acc0 = vfmaq_f32(acc0, va0, vb0);
+            let va1 = vld1q_f32(a.as_ptr().add(i + 4));
+            let vb1 = vld1q_f32(b.as_ptr().add(i + 4));
+            acc1 = vfmaq_f32(acc1, va1, vb1);
+            i += 8;
+        }
+        while i + 4 <= n {
+            let va = vld1q_f32(a.as_ptr().add(i));
+            let vb = vld1q_f32(b.as_ptr().add(i));
+            acc0 = vfmaq_f32(acc0, va, vb);
+            i += 4;
+        }
+        let mut s = vaddvq_f32(vaddq_f32(acc0, acc1));
+        while i < n {
+            s += a[i] * b[i];
+            i += 1;
+        }
+        s
+    }
+}
+
+/// `axpy_f32`のNEON実装(`acc[i] += scale * src[i]`)。
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn axpy_f32_neon(acc: &mut [f32], src: &[f32], scale: f32) {
+    use std::arch::aarch64::*;
+    unsafe {
+        let n = acc.len();
+        let vscale = vdupq_n_f32(scale);
+        let mut i = 0;
+        while i + 4 <= n {
+            let vacc = vld1q_f32(acc.as_ptr().add(i));
+            let vsrc = vld1q_f32(src.as_ptr().add(i));
+            let result = vfmaq_f32(vacc, vsrc, vscale);
+            vst1q_f32(acc.as_mut_ptr().add(i), result);
+            i += 4;
+        }
+        while i < n {
+            acc[i] += scale * src[i];
+            i += 1;
+        }
     }
 }
 
@@ -337,12 +425,68 @@ pub fn popcount_bytes(data: &[u8]) -> u64 {
             return unsafe { popcount_bytes_popcnt(data) };
         }
     }
+    #[cfg(target_arch = "aarch64")]
+    {
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            return unsafe { popcount_bytes_neon(data) };
+        }
+    }
     popcount_bytes_scalar(data)
 }
 
 /// [`popcount_bytes`] のスカラー参照実装。
 pub fn popcount_bytes_scalar(data: &[u8]) -> u64 {
     data.iter().map(|b| b.count_ones() as u64).sum()
+}
+
+/// `popcount_bytes`のNEON実装。`vcntq_u8`(バイトごとのポップカウント)+
+/// `vaddlvq_u8`(u16へワイドニングしながらの水平加算、16レーン×最大8=128が
+/// 上限のためu16でオーバーフローしない)を16バイトずつ処理する。
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn popcount_bytes_neon(data: &[u8]) -> u64 {
+    use std::arch::aarch64::*;
+    unsafe {
+        let mut total = 0u64;
+        let n = data.len();
+        let mut i = 0;
+        while i + 16 <= n {
+            let v = vld1q_u8(data.as_ptr().add(i));
+            let counts = vcntq_u8(v);
+            total += vaddlvq_u8(counts) as u64;
+            i += 16;
+        }
+        while i < n {
+            total += data[i].count_ones() as u64;
+            i += 1;
+        }
+        total
+    }
+}
+
+/// `hamming_distance`のNEON実装。`veorq_u8`でXORしてから
+/// `popcount_bytes_neon`と同じポップカウント手順を適用する。
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon")]
+unsafe fn hamming_distance_neon(a: &[u8], b: &[u8]) -> u64 {
+    use std::arch::aarch64::*;
+    unsafe {
+        let mut total = 0u64;
+        let n = a.len();
+        let mut i = 0;
+        while i + 16 <= n {
+            let va = vld1q_u8(a.as_ptr().add(i));
+            let vb = vld1q_u8(b.as_ptr().add(i));
+            let counts = vcntq_u8(veorq_u8(va, vb));
+            total += vaddlvq_u8(counts) as u64;
+            i += 16;
+        }
+        while i < n {
+            total += (a[i] ^ b[i]).count_ones() as u64;
+            i += 1;
+        }
+        total
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -372,6 +516,12 @@ pub fn hamming_distance(a: &[u8], b: &[u8]) -> u64 {
     {
         if detect().popcnt {
             return unsafe { hamming_distance_popcnt(a, b) };
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        if std::arch::is_aarch64_feature_detected!("neon") {
+            return unsafe { hamming_distance_neon(a, b) };
         }
     }
     hamming_distance_scalar(a, b)
@@ -474,10 +624,19 @@ pub fn trailing_zeros_u64(v: u64) -> u32 {
 
 /// ビット演算で選ばれている実装の説明(ログ用)。
 pub fn bit_impl_summary() -> String {
+    // 2026-09-23修正: `caps`(x86専用の`CpuCapabilities`)しか見ていなかった
+    // ため、aarch64で実際は`popcount_bytes`がNEON経由にディスパッチされて
+    // いても常に「scalar」と表示する不整合があった(実機〈arrows We2 PLUS
+    // M06〉で「popcount: scalar」なのに実測2倍以上速いという矛盾を確認)。
+    #[cfg(target_arch = "aarch64")]
+    let popcount_label = if std::arch::is_aarch64_feature_detected!("neon") { "neon" } else { "scalar" };
+    #[cfg(not(target_arch = "aarch64"))]
+    let popcount_label = if detect().popcnt { "popcnt" } else { "scalar" };
+
     let caps = detect();
     format!(
         "popcount: {} | pext/pdep: {} | tzcnt: {}",
-        if caps.popcnt { "popcnt" } else { "scalar" },
+        popcount_label,
         if caps.fast_bmi2() {
             "bmi2 (hw)"
         } else if caps.bmi2 {

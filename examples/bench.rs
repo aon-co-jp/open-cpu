@@ -235,6 +235,15 @@ fn bench_float() {
         open_cpu::axpy_f32(&mut acc2, &b, 1.000001);
     }
     let xd = t.elapsed().as_secs_f64();
+    // 2026-09-23追加: dot/popcount/hammingには既にscalar/dispatch一致検証が
+    // あったが、axpyには無かった(NEON実装追加の機会に埋めた既存の抜け)。
+    // 浮動小数点の加算順序がSIMD版とスカラー版で異なるため、完全一致では
+    // なく相対誤差での比較にする。
+    for (x, y) in acc.iter().zip(acc2.iter()) {
+        let diff = (x - y).abs();
+        let tol = 1e-3 * x.abs().max(1.0);
+        assert!(diff <= tol, "axpy scalar/dispatch mismatch: {x} vs {y} (diff {diff}, tol {tol})");
+    }
     println!(
         "axpy scalar    : {:>8.3} ms  {:>6.2} GFLOP/s",
         xs * 1000.0,
