@@ -84,19 +84,24 @@ jobs:
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
       - name: Build diagnostic CLIs (arm64-v8a)
-        env:
-          # ubuntu-latest runnerに既定でインストール済みのNDKを使う
-          # (Android SDK Command-line Tools経由、`ANDROID_NDK_HOME`は
-          # actions/setup-android等を使わなくてもGitHub提供イメージに
-          # 通常同梱されている、2026-09-23実機接続時と同じcargo-ndk手順)。
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+        # ubuntu-latest runnerに既定でインストール済みのNDKを使う(Android
+        # SDK Command-line Tools経由)。`${{ env.ANDROID_NDK_LATEST_HOME }}`
+        # という書き方はGitHub Actions式の`env`コンテキスト(ワークフロー内で
+        # `env:`により明示設定した変数のみ)を参照するため、ランナーが実際に
+        # 自身のシェル環境変数として持つ`ANDROID_NDK_LATEST_HOME`は拾えず
+        # 空文字になっていた(2026-09-23、実際にCIで踏んだ失敗
+        # 「ANDROID_NDK_HOME = ""」「Error detecting NDK version」)。
+        # シェル内で`$ANDROID_NDK_LATEST_HOME`として直接展開させることで解決。
+        #
         # `-o <dir>`(jniLibsへのコピー)は付けない: cdylibターゲットが
         # 無い(exampleバイナリのみの)このクレートでは、コピー対象の
         # 共有ライブラリが無く`cargo ndk`が非ゼロ終了する実バグを
         # ローカル検証で踏んだ(2026-09-23)。examplesは`-o`無しでも
         # `target/aarch64-linux-android/release/examples/`へ通常どおり
         # 出力されるため、`-o`自体が不要。
-        run: cargo ndk -t arm64-v8a build --release --example inventory --example bench
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          cargo ndk -t arm64-v8a build --release --example inventory --example bench
       - name: Package
         run: |
           mkdir -p dist
