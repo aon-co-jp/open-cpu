@@ -23,7 +23,7 @@ path = "examples/bench.rs"
 # 通常のcargo依存としての利用〈x86_64開発機でのcargo test/build等〉では
 # このターゲット条件に一致せずビルドされないため、既存の依存関係グラフを
 # 汚さない。
-jni = "0.21"
+jni = "0.22"
 
 [dependencies]
 
