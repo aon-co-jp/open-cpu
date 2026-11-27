@@ -1,3 +1,3 @@
 source: aon-co-jp/open-cpu
-commit: 4da312ec041f43d7d84d6349daddf56628885928
-updated: 2026-11-27T06:06:12Z
+commit: ee317dd8d1ac3f2616f5be09035a8d0ed93b7776
+updated: 2026-11-27T06:12:49Z
